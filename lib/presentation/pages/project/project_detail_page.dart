@@ -13,6 +13,7 @@ import 'package:vikunja_app/presentation/manager/project_controller.dart';
 import 'package:vikunja_app/presentation/pages/error_widget.dart';
 import 'package:vikunja_app/presentation/pages/loading_widget.dart';
 import 'package:vikunja_app/presentation/pages/project/project_edit.dart';
+import 'package:vikunja_app/presentation/widgets/project/gantt/gantt_widget.dart';
 import 'package:vikunja_app/presentation/widgets/project/kanban/kanban_widget.dart';
 import 'package:vikunja_app/presentation/widgets/project/project_task_list.dart';
 import 'package:vikunja_app/presentation/widgets/task/add_task_dialog.dart';
@@ -96,6 +97,8 @@ class ProjectPageState extends ConsumerState<ProjectDetailPage> {
         return ProjectTaskList(project);
       case ViewKind.kanban:
         return KanbanWidget(project: project);
+      case ViewKind.gantt:
+        return GanttWidget(project: project);
       default:
         return Text(AppLocalizations.of(context).notImplemented);
     }
@@ -128,6 +131,7 @@ class ProjectPageState extends ConsumerState<ProjectDetailPage> {
   Builder? _buildFab(Project project) {
     if (project.views.isEmpty ||
         project.views[_viewIndex].viewKind == ViewKind.kanban ||
+        project.views[_viewIndex].viewKind == ViewKind.gantt ||
         project.id < 0) {
       return null;
     }

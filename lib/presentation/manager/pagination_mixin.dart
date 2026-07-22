@@ -12,6 +12,8 @@ mixin PaginationMixin<T> {
     _totalPages = 1;
   }
 
+  int get totalPages => _totalPages;
+
   void updateTotalPages(Map<String, String> headers) {
     var checkHeaders = headers.map(
       (key, value) => MapEntry(key.toLowerCase(), value),
@@ -44,6 +46,12 @@ mixin PaginationMixin<T> {
     } finally {
       loadingNextPage = false;
     }
+  }
+
+  /// Sync _currentPage to a known value (used when all pages are loaded
+  /// manually outside of [loadMoreItems], e.g. in the Gantt branch).
+  void syncCurrentPage(int page) {
+    _currentPage = page;
   }
 
   bool get hasMorePages => _currentPage < _totalPages;

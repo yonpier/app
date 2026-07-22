@@ -96,6 +96,7 @@
   "noTasks": "No tasks",
   "noViews": "No views",
   "notImplemented": "Not implemented",
+  "ganttEmpty": "No dated tasks",
   "homeTab": "Home",
   "projectsTab": "Projects",
   "settingsTab": "Settings",

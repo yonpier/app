@@ -74,6 +74,32 @@ class ProjectController extends _$ProjectController with PaginationMixin<Task> {
           );
         },
       );
+    } else if (currentView.viewKind == ViewKind.gantt) {
+      // Gantt loads all pages upfront in loadForView, so this is
+      // typically a no-op. Continue pagination if not all loaded.
+      await loadMoreItems(
+        fetcher: (page) => _loadTasks(
+          currentState.project.id,
+          currentState.displayDoneTask,
+          null,
+          page,
+          ["start_date"],
+          ["asc"],
+          200,
+        ),
+        stateUpdater: (newTasks) {
+          final updatedTasks = [
+            ...currentState.tasks,
+            ...newTasks as List<Task>,
+          ];
+          state = AsyncData(
+            currentState.copyWith(
+              tasks: updatedTasks,
+              isLoadingNextPage: false,
+            ),
+          );
+        },
+      );
     } else if (currentView.viewKind == ViewKind.kanban) {
       final viewId = currentView.id;
 
@@ -118,33 +144,79 @@ class ProjectController extends _$ProjectController with PaginationMixin<Task> {
         .getDisplayDoneTasks(project.id);
 
     var tasks = <Task>[];
-    int? viewId = viewIndex == 0
-        ? project.views.firstWhere((view) => view.viewKind == ViewKind.list).id
-        : null;
+    final currentViewKind = project.views[viewIndex].viewKind;
 
-    var tasksResponse = await _loadTasks(
-      project.id,
-      displayDoneTask,
-      viewId,
-      1,
-    );
+    if (currentViewKind == ViewKind.gantt) {
+      // Gantt: load all pages with date-appropriate sorting
+      const perPage = 200;
+      var page = 1;
+      while (true) {
+        final res = await _loadTasks(
+          project.id,
+          displayDoneTask,
+          null,
+          page,
+          ["start_date"],
+          ["asc"],
+          perPage,
+        );
+        if (!res.isSuccessful) {
+          if (res.isError) {
+            state = AsyncError(res.toError().error, StackTrace.current);
+            return;
+          } else if (res.isException) {
+            state = AsyncError(
+              res.toException().message,
+              StackTrace.current,
+            );
+            return;
+          }
+          break;
+        }
+        final success = res.toSuccess();
+        tasks.addAll(success.body);
+        updateTotalPages(success.headers);
+        final totalPages = int.tryParse(
+              success.headers['x-pagination-total-pages'] ?? '1',
+            ) ??
+            1;
+        if (page >= totalPages) break;
+        page++;
+      }
+      // All pages are now loaded; advance _currentPage so canLoadNextPage
+      // returns false and loadNextPage won't re-fetch already-loaded pages.
+      syncCurrentPage(totalPages);
+    } else {
+      int? viewId = viewIndex == 0
+          ? project.views
+              .firstWhere((view) => view.viewKind == ViewKind.list)
+              .id
+          : null;
 
-    if (tasksResponse.isSuccessful) {
-      updateTotalPages(tasksResponse.toSuccess().headers);
-      tasks = tasksResponse.toSuccess().body;
-    } else if (tasksResponse.isError) {
-      state = AsyncError(tasksResponse.toError().error, StackTrace.current);
-      return;
-    } else if (tasksResponse.isException) {
-      state = AsyncError(
-        tasksResponse.toException().message,
-        StackTrace.current,
+      var tasksResponse = await _loadTasks(
+        project.id,
+        displayDoneTask,
+        viewId,
+        1,
       );
-      return;
+
+      if (tasksResponse.isSuccessful) {
+        updateTotalPages(tasksResponse.toSuccess().headers);
+        tasks = tasksResponse.toSuccess().body;
+      } else if (tasksResponse.isError) {
+        state = AsyncError(tasksResponse.toError().error, StackTrace.current);
+        return;
+      } else if (tasksResponse.isException) {
+        state = AsyncError(
+          tasksResponse.toException().message,
+          StackTrace.current,
+        );
+        return;
+      }
     }
 
     var buckets = <Bucket>[];
-    if (project.views[viewIndex].viewKind == ViewKind.kanban) {
+    if (currentViewKind == ViewKind.kanban) {
       var bucketsResponse = await _loadBuckets(
         projectId: project.id,
         viewId: project.views[viewIndex].id,
@@ -187,13 +259,16 @@ class ProjectController extends _$ProjectController with PaginationMixin<Task> {
     bool displayDoneTasks, [
     int? view,
     int page = 1,
+    List<String>? sortBy,
+    List<String>? orderBy,
+    int? perPage,
   ]) async {
     var repo = ref.read(taskRepositoryProvider);
 
     Map<String, List<String>> queryParams = view == null
         ? {
-            "sort_by": ["done", "id"],
-            "order_by": ["asc", "desc"],
+            "sort_by": sortBy ?? ["done", "id"],
+            "order_by": orderBy ?? ["asc", "desc"],
             "page": ["$page"],
           }
         : {
@@ -201,6 +276,10 @@ class ProjectController extends _$ProjectController with PaginationMixin<Task> {
             "order_by": ["asc"],
             "page": ["$page"],
           };
+
+    if (perPage != null) {
+      queryParams["per_page"] = ["$perPage"];
+    }
 
     if (!displayDoneTasks) {
       queryParams.addAll({
@@ -479,6 +558,32 @@ class ProjectController extends _$ProjectController with PaginationMixin<Task> {
     }
 
     return false;
+  }
+
+  Future<bool> updateTaskDates(Task task) async {
+    final value = state.value;
+    if (value == null) return false;
+
+    // Snapshot for rollback
+    final originalIndex = value.tasks.indexWhere((t) => t.id == task.id);
+    if (originalIndex == -1) return false;
+    final original = value.tasks[originalIndex];
+
+    // Update optimiste
+    final newTasks = List<Task>.from(value.tasks);
+    newTasks[originalIndex] = task;
+    state = AsyncData(value.copyWith(tasks: newTasks));
+
+    // Commit réseau
+    final res = await ref.read(taskRepositoryProvider).update(task);
+    if (!res.isSuccessful) {
+      // Rollback
+      final rolled = List<Task>.from(state.value!.tasks);
+      rolled[originalIndex] = original;
+      state = AsyncData(state.value!.copyWith(tasks: rolled));
+      return false;
+    }
+    return true;
   }
 
   void reload() {
